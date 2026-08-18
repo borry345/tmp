@@ -339,7 +339,7 @@ STM32 등 ARM 마이크로컨트롤러에서 GPIO 핀을 제어할 때 사용하
 
     ![moder](./source/img/23afrh.png)
 
-![af](/source/img/6.png)
+![af](./source/img/6.png)
 [datasheet58p~65p]
 1. PA9 핀의 AF7번 기능이 USART1_TX에 할당되어 있다고 써 있습니다.
 1. PA9번 핀이므로 GPIOA_AFRH 레지스터를 변경해야 합니다(Pin 8~15 제어).
@@ -686,7 +686,7 @@ I/O 포트가 아날로그 설정으로 프로그래밍되었을 때:
 ![alt text](./source/img/31.png)
 
 MODER_register 는 핀당 bit가 2개씩 : 범위 비트 `Bits 2y:2y+1 MODERy[1:0]`  
-IDR_register 는 핀당 bit가 1개 : 단일 비트 `Bits 31:16`, `Bits15:0`
+IDR_register 는 핀당 bit가 1개 : 단일 비트 `IDRy`
 
 
 ![alt text](./source/img/32.png)  
@@ -755,18 +755,271 @@ tips
 ![umpah](./source/img/26.jpg)
 
 * VCC: 아두이노 5V 핀에 연결
-* TRIG: 아두이노 디지털 핀(예: 9번)에 연결
-* ECHO: 아두이노 디지털 핀(예: 8번)에 연결
+* TRIG: 아두이노 디지털 핀(예: 9번)에 연결 > 여기로 신호가 가면 초음파 발사
+* ECHO: 아두이노 디지털 핀(예: 8번)에 연결 > 반사된 초음파 받아서 입력
 * GND: 아두이노 GND 핀에 연결
 
-![cirkit](./source/img/27.png)
+![umpah](./source/img/36.png)
 
-* 거리 7cm마다 불빛이 서로 다르게 들어오게 해보자
-* 0~6 : 000
-* 7~13 : 001
-* 14~20 : 010
-* 21~27 : 011
-* 28~34 : 100
-* 35~41 : 101
-* 42~48 : 110
-* 49~ : 111
+![umpah](./source/img/37.png)
+
+회로도 참고 !
+
+led에는 저항이 꼭 있어야해요.
+
+**
+
+![umpah](./source/img/38.png)
+
+
+![umpah](./source/img/39.png)
+
+
+datasheet를 살펴보면 5v입력 받아도 괜찮은 핀과 그렇지 않은 핀이 있다.
+다행이 GPIO 핀들은 전부 ok
+
+
+```md
+버튼을 누르기 전에는
+
+초음파 센서는 작동하지 않습니다.
+
+LED는 빛을 내지 않습니다.
+
+
+
+버튼을 눌러서 작동시킵니다.
+
+초음파 센서가 감지한 거리별로 각 다이오드에 불이 켜집니다.
+
+0~9cm : red 다이오드(PC8) 그리고 부저 GEC1606이 작동합니다. 나머지 다이오드는 작동하지 않습니다.
+
+10~19cm : yellow 다이오드 PC6이 켜집니다. 나머지 다이오드와 부저는 작동하지 않습니다.
+
+20cm~ : green 다이오드 PC5가 켜집니다. 나머지 다이오드와 부저는 작동하지 않습니다.
+
+
+
+버튼을 다시 누르면
+
+초음파 센서는 작동하지 않습니다.
+
+LED는 빛을 내지 않습니다. 
+
+
+```
+```c
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Distance Warning System using HC-SR04 & STM32F446RE
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* Private variables ---------------------------------------------------------*/
+TIM_HandleTypeDef htim2;
+
+/* USER CODE BEGIN PV */
+uint8_t system_running = 0;  // 0: 정지 상태, 1: 동작 상태
+uint8_t prev_button_state = GPIO_PIN_SET; // 내부 풀업 설정으로 기본 HIGH
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_TIM2_Init(void);
+
+/* USER CODE BEGIN PFP */
+void delay_us(uint16_t us);
+uint32_t HCSR04_Read_Distance(void);
+void Set_Outputs(uint8_t red, uint8_t yellow, uint8_t green, uint8_t buzzer);
+/* USER CODE END PFP */
+
+int main(void)
+{
+  HAL_Init();
+  SystemClock_Config();
+
+  MX_GPIO_Init();
+  MX_TIM2_Init();
+
+  /* USER CODE BEGIN 2 */
+  HAL_TIM_Base_Start(&htim2); // 마이크로초 지연용 타이머 시작
+  Set_Outputs(0, 0, 0, 0);   // 초기 상태: 모든 LED 및 부저 OFF
+  /* USER CODE END 2 */
+
+  while (1)
+  {
+    /* ------------------------------------------------------------------
+     * 1. 버튼 토글 처리 (내부 풀업 방식: 누르면 LOW)
+     * ------------------------------------------------------------------ */
+    uint8_t curr_button_state = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_10);
+    
+    // 버튼이 떼어져 있다가 눌린 순간(Falling Edge) 감지
+    if (prev_button_state == GPIO_PIN_SET && curr_button_state == GPIO_PIN_RESET)
+    {
+      HAL_Delay(50); // 디바운싱(채터링 방지) 지연
+      if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_10) == GPIO_PIN_RESET)
+      {
+        system_running = !system_running; // 시스템 동작 상태 토글
+        
+        // 정지 상태로 전환 시 모든 출력 즉시 끄기
+        if (!system_running)
+        {
+          Set_Outputs(0, 0, 0, 0);
+        }
+      }
+    }
+    prev_button_state = curr_button_state;
+
+    /* ------------------------------------------------------------------
+     * 2. 시스템 동작 상태별 로직 수행
+     * ------------------------------------------------------------------ */
+    if (system_running)
+    {
+      uint32_t distance = HCSR04_Read_Distance();
+
+      if (distance <= 9)
+      {
+        // 0~9cm: Red LED(PC8) ON, Buzzer(PC9) ON, 나머지 OFF
+        Set_Outputs(1, 0, 0, 1);
+      }
+      else if (distance >= 10 && distance <= 19)
+      {
+        // 10~19cm: Yellow LED(PC6) ON, 나머지 OFF
+        Set_Outputs(0, 1, 0, 0);
+      }
+      else // 20cm 이상
+      {
+        // 20cm~: Green LED(PC5) ON, 나머지 OFF
+        Set_Outputs(0, 0, 1, 0);
+      }
+
+      HAL_Delay(100); // 센서 측정 주기 조정 (100ms 간격)
+    }
+    else
+    {
+      HAL_Delay(10); // 정지 상태일 때 루프 대기시간
+    }
+  }
+}
+
+/**
+  * @brief 마이크로초(us) 단위 지연 함수 (TIM2 이용)
+  */
+void delay_us(uint16_t us)
+{
+  __HAL_TIM_SET_COUNTER(&htim2, 0);
+  while (__HAL_TIM_GET_COUNTER(&htim2) < us);
+}
+
+/**
+  * @brief HC-SR04 초음파 센서 거리 측정 함수 (cm 단위)
+  */
+uint32_t HCSR04_Read_Distance(void)
+{
+  uint32_t local_time = 0;
+
+  // 1. Trigger 핀에 10us 동안 HIGH 신호 출력
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_RESET);
+  delay_us(2);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_SET);
+  delay_us(10);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_RESET);
+
+  // 2. ECHO 핀(PA2)이 HIGH가 될 때까지 대기 (타임아웃 처리)
+  uint32_t timeout = 10000;
+  while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_RESET)
+  {
+    if (--timeout == 0) return 999; // 측정 실패시 큰 값 반환
+  }
+
+  // 3. ECHO 핀이 HIGH인 동안 시간 측정
+  __HAL_TIM_SET_COUNTER(&htim2, 0);
+  while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_SET)
+  {
+    if (__HAL_TIM_GET_COUNTER(&htim2) > 30000) break; // 최대 측정 범위 초과 방지
+  }
+  local_time = __HAL_TIM_GET_COUNTER(&htim2);
+
+  // 4. 거리 계산 (음속 340m/s -> 시간(us) / 58 = cm)
+  return (local_time / 58);
+}
+
+/**
+  * @brief LED 및 부저 출력 일괄 제어 함수
+  */
+void Set_Outputs(uint8_t red, uint8_t yellow, uint8_t green, uint8_t buzzer)
+{
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_8, red ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_6, yellow ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5, green ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_9, buzzer ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+/* GPIO 초기화 함수 */
+static void MX_GPIO_Init(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+
+  /* 출력 핀 초기화 (PA3 - TRIG) */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_RESET);
+  GPIO_InitStruct.Pin = GPIO_PIN_3;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /* 입력 핀 초기화 (PA2 - ECHO) */
+  GPIO_InitStruct.Pin = GPIO_PIN_2;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /* 입력 핀 초기화 (PA10 - Switch, 내부 풀업 사용) */
+  GPIO_InitStruct.Pin = GPIO_PIN_10;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP; // 내부 풀업 설정
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /* 출력 핀 초기화 (PC5 - Green, PC6 - Yellow, PC8 - Red, PC9 - Buzzer) */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_8|GPIO_PIN_9, GPIO_PIN_RESET);
+  GPIO_InitStruct.Pin = GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_8|GPIO_PIN_9;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+}
+
+/* TIM2 초기화 함수 (1MHz 카운팅 기준) */
+static void MX_TIM2_Init(void)
+{
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 83; // 84MHz APB1 클럭 기준 1MHz (1us)
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 0xFFFF;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+```
