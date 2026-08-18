@@ -752,6 +752,10 @@ tips
 
 ***
 ## 음파음파
+
+![umpah](./source/img/41.gif)
+
+
 ![umpah](./source/img/26.jpg)
 
 * VCC: 아두이노 5V 핀에 연결
