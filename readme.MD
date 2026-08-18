@@ -816,219 +816,309 @@ LED는 빛을 내지 않습니다.
 1. STM32CubeMX 핀 설정 안내
     * 코드 작성 전 CubeMX에서 아래와 같이 핀 설정을 구성해 주세요.
         1. GPIO Output 설정:
-            * PC5 $\rightarrow$ GPIO_Output (Green LED)
-            * PC6 $\rightarrow$ GPIO_Output (Yellow LED)
-            * PC8 $\rightarrow$ GPIO_Output (Red LED)
-            * PC9 $\rightarrow$ GPIO_Output (Buzzer)
-            * PA3 $\rightarrow$ GPIO_Output (HC-SR04 TRIG)
+            * PA5: GPIO_Output 설정 (Label: LD2)
+            * PA9: GPIO_Output 설정 (Label: TRIG)
+            * PC5 : GPIO_Output (초록 LED)
+            * PC6 : GPIO_Output (노란 LED)
+            * PC8 : GPIO_Output (빨간 LED)
+            * PC9 : GPIO_Output (부저)
         1. GPIO Input 설정:
-            * PA2 $\rightarrow$ GPIO_Input (HC-SR04 ECHO)
-            * PA10 $\rightarrow$ GPIO_Input, Pull-up 설정 필수 (스위치: 누르면 LOW 입력)
-        1. Timer(TIM2) 설정:
-            * TIM2 활성화 (Clock Source: Internal Clock)
-            * Prescaler: APB1 Timer Clock이 84MHz 기준일 때, Prescaler를 83으로 설정하면 1MHz(1µs 카운트)로 동작합니다.
+            * PA8: GPIO_Input 설정 (Label: ECHO)
+            * PB10: GPIO_Input 설정, `Pull-up`으로 변경 (Label: BTN_TOGGLE)
+1. Timer 설정 (마이크로초(µs) 단위 시간 측정용)
+    * HC-SR04는 펄스 지속 시간을 microsecond(µs) 단위로 측정해야 하므로 TIM2 타이머를 사용합니다.
+        1. 좌측 메뉴 Categories -> Timers -> TIM2 선택
+        1. Clock Source: Internal Clock 설정
+        1. Parameter Settings:
+        1. Prescaler (PSC): 16 - 1
+            > (기본 HSI 내부 클록인 16MHz 기준, Prescaler를 16-1로 설정하면 타이머 카운터가 1µs마다 1씩 증가합니다. 만약 시스템 클록을 84MHz로 변경하셨다면 84 - 1로 설정하세요.)
 ```c
 /* USER CODE BEGIN Header */
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : Distance Warning System using HC-SR04 & STM32F446RE
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2026 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
   ******************************************************************************
   */
 /* USER CODE END Header */
-
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
 /* Private variables ---------------------------------------------------------*/
+
 TIM_HandleTypeDef htim2;
 
 /* USER CODE BEGIN PV */
-uint8_t system_running = 0;  // 0: 정지 상태, 1: 동작 상태
-uint8_t prev_button_state = GPIO_PIN_SET; // 내부 풀업 설정으로 기본 HIGH
+uint32_t pMillis;
+uint32_t val1 = 0;
+uint32_t val2 = 0;
+uint16_t echo_time = 0;
+uint8_t distance_cm = 0;
+
+uint8_t sensor_enable = 0; // 0: 센서 OFF / 1: 센서 ON (토글 플래그)
+
+// 마이크로초(us) 단위 지연 함수
+void delay_us (uint16_t us)
+{
+    __HAL_TIM_SET_COUNTER(&htim2, 0);
+    while (__HAL_TIM_GET_COUNTER(&htim2) < us);
+}
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_TIM2_Init(void);
-
 /* USER CODE BEGIN PFP */
-void delay_us(uint16_t us);
-uint32_t HCSR04_Read_Distance(void);
-void Set_Outputs(uint8_t red, uint8_t yellow, uint8_t green, uint8_t buzzer);
+
 /* USER CODE END PFP */
 
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
 int main(void)
 {
+
+  /* USER CODE BEGIN 1 */
+
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
   SystemClock_Config();
 
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_TIM2_Init();
-
   /* USER CODE BEGIN 2 */
-  HAL_TIM_Base_Start(&htim2); // 마이크로초 지연용 타이머 시작
-  Set_Outputs(0, 0, 0, 0);   // 초기 상태: 모든 LED 및 부저 OFF
+  HAL_TIM_Base_Start(&htim2); // TIM2 타이머 시작
   /* USER CODE END 2 */
 
+  /* Initialize leds */
+  BSP_LED_Init(LED2);
+
+  /* Initialize USER push-button, will be used to trigger an interrupt each time it's pressed.*/
+  BSP_PB_Init(BUTTON_USER, BUTTON_MODE_EXTI);
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
   while (1)
-  {
-    /* ------------------------------------------------------------------
-     * 1. 버튼 토글 처리 (내부 풀업 방식: 누르면 LOW)
-     * ------------------------------------------------------------------ */
-    uint8_t curr_button_state = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_10);
-    
-    // 버튼이 떼어져 있다가 눌린 순간(Falling Edge) 감지
-    if (prev_button_state == GPIO_PIN_SET && curr_button_state == GPIO_PIN_RESET)
     {
-      HAL_Delay(50); // 디바운싱(채터링 방지) 지연
-      if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_10) == GPIO_PIN_RESET)
-      {
-        system_running = !system_running; // 시스템 동작 상태 토글
-        
-        // 정지 상태로 전환 시 모든 출력 즉시 끄기
-        if (!system_running)
+        // ----------------------------------------------------
+        // 1. 버튼 입력 처리 (토글 및 스위치 채터링 방지)
+        // ----------------------------------------------------
+        // Pull-up 설정이므로 버튼을 누르면 LOW(RESET) 상태가 됨
+        if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_10) == GPIO_PIN_RESET)
         {
-          Set_Outputs(0, 0, 0, 0);
+            HAL_Delay(50); // 버튼 접점 진동(채터링) 방지용 지연
+
+            // 지연 후에도 여전히 눌려있다면 진짜 누른 것으로 인정
+            if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_10) == GPIO_PIN_RESET)
+            {
+                sensor_enable = !sensor_enable; // ON/OFF 상태 반전 (0 -> 1 -> 0)
+
+                // 버튼에서 손을 뗄 때까지 대기 (꾹 누르고 있어도 1번만 토글되도록)
+                while (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_10) == GPIO_PIN_RESET);
+            }
         }
-      }
-    }
-    prev_button_state = curr_button_state;
 
-    /* ------------------------------------------------------------------
-     * 2. 시스템 동작 상태별 로직 수행
-     * ------------------------------------------------------------------ */
-    if (system_running)
-    {
-      uint32_t distance = HCSR04_Read_Distance();
+        // ----------------------------------------------------
+	  // 2. 센서 동작 상태에 따른 처리
+	  // ----------------------------------------------------
+	  if (sensor_enable == 1)
+	  {
+		  // --- 초음파 측정 시작 ---
+		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
 
-      if (distance <= 9)
-      {
-        // 0~9cm: Red LED(PC8) ON, Buzzer(PC9) ON, 나머지 OFF
-        Set_Outputs(1, 0, 0, 1);
-      }
-      else if (distance >= 10 && distance <= 19)
-      {
-        // 10~19cm: Yellow LED(PC6) ON, 나머지 OFF
-        Set_Outputs(0, 1, 0, 0);
-      }
-      else // 20cm 이상
-      {
-        // 20cm~: Green LED(PC5) ON, 나머지 OFF
-        Set_Outputs(0, 0, 1, 0);
-      }
+		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_RESET);
+		  delay_us(2);
+		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_SET);
+		  delay_us(10);
+		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_RESET);
 
-      HAL_Delay(100); // 센서 측정 주기 조정 (100ms 간격)
+		  pMillis = HAL_GetTick();
+		  while (!(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8)) && (HAL_GetTick() - pMillis < 10));
+		  val1 = __HAL_TIM_GET_COUNTER(&htim2);
+
+		  pMillis = HAL_GetTick();
+		  while ((HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8)) && (HAL_GetTick() - pMillis < 10));
+		  val2 = __HAL_TIM_GET_COUNTER(&htim2);
+
+		  if (val2 >= val1)
+		  {
+			  echo_time = val2 - val1;
+		  }
+		  else
+		  {
+			  echo_time = (65535 - val1) + val2;
+		  }
+
+		  distance_cm = echo_time / 58;
+
+		  // ----------------------------------------------------
+		  // 3. 거리 구간별 외부 LED 제어 로직
+		  // ----------------------------------------------------
+		  if (distance_cm > 0 && distance_cm <= 9)
+		  {
+			  // [0~9cm] 빨간 LED 2개(PC8, PC9) ON / 나머지 OFF
+			  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_8 | GPIO_PIN_9, GPIO_PIN_SET);
+			  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_6, GPIO_PIN_RESET);
+			  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5, GPIO_PIN_RESET);
+		  }
+		  else if (distance_cm >= 10 && distance_cm <= 19)
+		  {
+			  // [10~19cm] 노란 LED(PC6) ON / 나머지 OFF
+			  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_8 | GPIO_PIN_9, GPIO_PIN_RESET);
+			  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_6, GPIO_PIN_SET);
+			  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5, GPIO_PIN_RESET);
+		  }
+		  else if (distance_cm >= 20)
+		  {
+			  // [20cm 이상] 초록 LED(PC5) ON / 나머지 OFF
+			  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_8 | GPIO_PIN_9, GPIO_PIN_RESET);
+			  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_6, GPIO_PIN_RESET);
+			  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5, GPIO_PIN_SET);
+		  }
+		  else
+		  {
+			  // 측정 오류(0cm 이하) 발생 시 모든 외부 LED OFF
+			  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5 | GPIO_PIN_6 | GPIO_PIN_8 | GPIO_PIN_9, GPIO_PIN_RESET);
+		  }
+	  }
+	  else
+	  {
+		  // --- 센서 OFF 상태일 때: 모든 외부/온보드 LED 꺼짐 ---
+		  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5 | GPIO_PIN_6 | GPIO_PIN_8 | GPIO_PIN_9, GPIO_PIN_RESET);
+		  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); // LD2 OFF
+	  }
+
+	  HAL_Delay(50); // 루프 주기를 조금 줄여 버튼 반응성을 높임
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
     }
-    else
-    {
-      HAL_Delay(10); // 정지 상태일 때 루프 대기시간
-    }
-  }
+  /* USER CODE END 3 */
 }
 
 /**
-  * @brief 마이크로초(us) 단위 지연 함수 (TIM2 이용)
+  * @brief System Clock Configuration
+  * @retval None
   */
-void delay_us(uint16_t us)
+void SystemClock_Config(void)
 {
-  __HAL_TIM_SET_COUNTER(&htim2, 0);
-  while (__HAL_TIM_GET_COUNTER(&htim2) < us);
-}
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
-/**
-  * @brief HC-SR04 초음파 센서 거리 측정 함수 (cm 단위)
+  /** Configure the main internal regulator output voltage
   */
-uint32_t HCSR04_Read_Distance(void)
-{
-  uint32_t local_time = 0;
+  __HAL_RCC_PWR_CLK_ENABLE();
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
 
-  // 1. Trigger 핀에 10us 동안 HIGH 신호 출력
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_RESET);
-  delay_us(2);
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_SET);
-  delay_us(10);
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_RESET);
-
-  // 2. ECHO 핀(PA2)이 HIGH가 될 때까지 대기 (타임아웃 처리)
-  uint32_t timeout = 10000;
-  while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_RESET)
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLM = 16;
+  RCC_OscInitStruct.PLL.PLLN = 336;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
+  RCC_OscInitStruct.PLL.PLLQ = 2;
+  RCC_OscInitStruct.PLL.PLLR = 2;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
-    if (--timeout == 0) return 999; // 측정 실패시 큰 값 반환
+    Error_Handler();
   }
 
-  // 3. ECHO 핀이 HIGH인 동안 시간 측정
-  __HAL_TIM_SET_COUNTER(&htim2, 0);
-  while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_2) == GPIO_PIN_SET)
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
   {
-    if (__HAL_TIM_GET_COUNTER(&htim2) > 30000) break; // 최대 측정 범위 초과 방지
+    Error_Handler();
   }
-  local_time = __HAL_TIM_GET_COUNTER(&htim2);
-
-  // 4. 거리 계산 (음속 340m/s -> 시간(us) / 58 = cm)
-  return (local_time / 58);
 }
 
 /**
-  * @brief LED 및 부저 출력 일괄 제어 함수
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
   */
-void Set_Outputs(uint8_t red, uint8_t yellow, uint8_t green, uint8_t buzzer)
-{
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_8, red ? GPIO_PIN_SET : GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_6, yellow ? GPIO_PIN_SET : GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5, green ? GPIO_PIN_SET : GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_9, buzzer ? GPIO_PIN_SET : GPIO_PIN_RESET);
-}
-
-/* GPIO 초기화 함수 */
-static void MX_GPIO_Init(void)
-{
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-
-  /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-
-  /* 출력 핀 초기화 (PA3 - TRIG) */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, GPIO_PIN_RESET);
-  GPIO_InitStruct.Pin = GPIO_PIN_3;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /* 입력 핀 초기화 (PA2 - ECHO) */
-  GPIO_InitStruct.Pin = GPIO_PIN_2;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /* 입력 핀 초기화 (PA10 - Switch, 내부 풀업 사용) */
-  GPIO_InitStruct.Pin = GPIO_PIN_10;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLUP; // 내부 풀업 설정
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /* 출력 핀 초기화 (PC5 - Green, PC6 - Yellow, PC8 - Red, PC9 - Buzzer) */
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_8|GPIO_PIN_9, GPIO_PIN_RESET);
-  GPIO_InitStruct.Pin = GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_8|GPIO_PIN_9;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-}
-
-/* TIM2 초기화 함수 (1MHz 카운팅 기준) */
 static void MX_TIM2_Init(void)
 {
+
+  /* USER CODE BEGIN TIM2_Init 0 */
+
+  /* USER CODE END TIM2_Init 0 */
+
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
 
+  /* USER CODE BEGIN TIM2_Init 1 */
+
+  /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 83; // 84MHz APB1 클럭 기준 1MHz (1us)
+  htim2.Init.Prescaler = 83;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 0xFFFF;
+  htim2.Init.Period = 4294967295;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -1040,5 +1130,114 @@ static void MX_TIM2_Init(void)
   {
     Error_Handler();
   }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* USER CODE END TIM2_Init 2 */
+
 }
+
+/**
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPIO_Init(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  /* USER CODE BEGIN MX_GPIO_Init_1 */
+
+  /* USER CODE END MX_GPIO_Init_1 */
+
+  /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOH_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_8|GPIO_PIN_9, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(TRIG_GPIO_Port, TRIG_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pins : USART_TX_Pin USART_RX_Pin */
+  GPIO_InitStruct.Pin = USART_TX_Pin|USART_RX_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  GPIO_InitStruct.Alternate = GPIO_AF7_USART2;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PC5 PC6 PC8 PC9 */
+  GPIO_InitStruct.Pin = GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_8|GPIO_PIN_9;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : BTN_TOGGLE_Pin */
+  GPIO_InitStruct.Pin = BTN_TOGGLE_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(BTN_TOGGLE_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : ECHO_Pin */
+  GPIO_InitStruct.Pin = ECHO_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(ECHO_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : TRIG_Pin */
+  GPIO_InitStruct.Pin = TRIG_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(TRIG_GPIO_Port, &GPIO_InitStruct);
+
+  /* USER CODE BEGIN MX_GPIO_Init_2 */
+
+  /* USER CODE END MX_GPIO_Init_2 */
+}
+
+/* USER CODE BEGIN 4 */
+
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  __disable_irq();
+  while (1)
+  {
+  }
+  /* USER CODE END Error_Handler_Debug */
+}
+#ifdef USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */
+
 ```
