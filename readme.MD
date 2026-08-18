@@ -763,6 +763,8 @@ tips
 
 ![umpah](./source/img/37.png)
 
+![umpah](./source/img/40.png)
+
 회로도 참고 !
 
 led에는 저항이 꼭 있어야해요.
@@ -773,6 +775,8 @@ led에는 저항이 꼭 있어야해요.
 
 
 ![umpah](./source/img/39.png)
+
+
 
 
 datasheet를 살펴보면 5v입력 받아도 괜찮은 핀과 그렇지 않은 핀이 있다.
@@ -808,6 +812,21 @@ LED는 빛을 내지 않습니다.
 
 
 ```
+
+1. STM32CubeMX 핀 설정 안내
+    * 코드 작성 전 CubeMX에서 아래와 같이 핀 설정을 구성해 주세요.
+        1. GPIO Output 설정:
+            * PC5 $\rightarrow$ GPIO_Output (Green LED)
+            * PC6 $\rightarrow$ GPIO_Output (Yellow LED)
+            * PC8 $\rightarrow$ GPIO_Output (Red LED)
+            * PC9 $\rightarrow$ GPIO_Output (Buzzer)
+            * PA3 $\rightarrow$ GPIO_Output (HC-SR04 TRIG)
+        1. GPIO Input 설정:
+            * PA2 $\rightarrow$ GPIO_Input (HC-SR04 ECHO)
+            * PA10 $\rightarrow$ GPIO_Input, Pull-up 설정 필수 (스위치: 누르면 LOW 입력)
+        1. Timer(TIM2) 설정:
+            * TIM2 활성화 (Clock Source: Internal Clock)
+            * Prescaler: APB1 Timer Clock이 84MHz 기준일 때, Prescaler를 83으로 설정하면 1MHz(1µs 카운트)로 동작합니다.
 ```c
 /* USER CODE BEGIN Header */
 /**
